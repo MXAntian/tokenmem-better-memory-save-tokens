@@ -1,5 +1,5 @@
 // ============================================================
-// 千夏记忆系统 v1.0 (SQLite + FTS5)
+// claude-agent-memory v1.0 (SQLite + FTS5)
 // 灵感来源：AIRI (moeru-ai/airi) 记忆架构
 //
 // 核心能力：
@@ -679,7 +679,7 @@ export function buildMemoryContext(opts = {}) {
 
   return [
     '',
-    '## 千夏记忆系统（自动召回）',
+    '## Agent 记忆系统（自动召回）',
     '以下是与当前对话相关的记忆和历史。可参考但不必逐条回应：',
     '',
     ...sections,
@@ -926,7 +926,7 @@ if (_isMain) {
 
     } else {
       process.stderr.write([
-        '千夏记忆系统 CLI',
+        'claude-agent-memory CLI',
         '',
         '用法:',
         '  node memory/index.mjs --stats                  输出统计 JSON',

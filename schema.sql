@@ -1,5 +1,5 @@
 -- ============================================================
--- 千夏记忆系统 Schema v1.0 (SQLite + FTS5)
+-- claude-agent-memory Schema v1.0 (SQLite + FTS5)
 -- 灵感来源：AIRI (moeru-ai/airi) 记忆架构
 --
 -- 设计原则：

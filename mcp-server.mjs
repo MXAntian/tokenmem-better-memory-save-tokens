@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ============================================================
-// 千夏记忆系统 MCP Server
+// claude-agent-memory MCP Server
 // 暴露 recall_memory / store_memory / memory_stats 三个工具
 // 让 Claude Code 主会话按需查询，替代 UserPromptSubmit 预注入
 // ============================================================
@@ -22,14 +22,14 @@ import {
 initMemory()
 
 const server = new McpServer({
-  name: 'chinatsu-memory',
+  name: 'agent-memory',
   version: '1.0.0',
 })
 
 // ── 工具：recall_memory ───────────────────────────────────────
 server.tool(
   'recall_memory',
-  '从千夏的长期记忆中检索与查询相关的内容。涉及个人偏好、过去工作、项目状态、关系、决策时必须调用。',
+  '从 Agent 的长期记忆中检索与查询相关的内容。涉及个人偏好、过去工作、项目状态、关系、决策时必须调用。',
   {
     query: z.string().describe('查询内容，用自然语言描述想找的信息'),
     limit: z.number().optional().default(8).describe('返回条数，默认 8'),
@@ -52,7 +52,7 @@ server.tool(
 // ── 工具：store_memory ────────────────────────────────────────
 server.tool(
   'store_memory',
-  '将重要信息存入千夏的长期记忆。对话中发现的新偏好、决策、关键事实、用户反馈等应及时存入。',
+  '将重要信息存入 Agent 的长期记忆。对话中发现的新偏好、决策、关键事实、用户反馈等应及时存入。',
   {
     content: z.string().describe('要记忆的内容'),
     summary: z.string().optional().describe('一句话摘要（可选）'),
@@ -83,7 +83,7 @@ server.tool(
 // ── 工具：memory_stats ────────────────────────────────────────
 server.tool(
   'memory_stats',
-  '查看千夏记忆系统的统计信息：记忆总数、分层分布、对话数、活跃目标等。',
+  '查看 Agent 记忆系统的统计信息：记忆总数、分层分布、对话数、活跃目标等。',
   {},
   async () => {
     const stats = getMemoryStats()
