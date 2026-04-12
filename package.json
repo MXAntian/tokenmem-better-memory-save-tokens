@@ -1,5 +1,5 @@
 {
-  "name": "claude-agent-memory",
+  "name": "engram",
   "version": "1.0.0",
   "description": "Persistent long-term memory for Claude Code agents — SQLite + FTS5 + MCP on-demand recall",
   "type": "module",

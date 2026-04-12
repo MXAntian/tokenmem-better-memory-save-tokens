@@ -11,7 +11,7 @@
 //   - 可选：向量相似度（JSON 存储，应用层计算余弦距离）
 //
 // 依赖：better-sqlite3（同步 API，高性能）
-// 数据文件：同目录下 chinatsu.db
+// 数据文件：同目录下 engram.db
 // ============================================================
 
 import { readFileSync, existsSync } from 'node:fs'
@@ -21,7 +21,7 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DB_PATH = resolve(__dirname, 'chinatsu.db')
+const DB_PATH = resolve(__dirname, 'engram.db')
 const SCHEMA_PATH = resolve(__dirname, 'schema.sql')
 // wangfenjin/simple 中文分词扩展（Windows x64 预编译）
 const SIMPLE_EXT_DIR = resolve(__dirname, 'lib/libsimple-windows-x64')

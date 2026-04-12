@@ -22,7 +22,7 @@ import {
 initMemory()
 
 const server = new McpServer({
-  name: 'agent-memory',
+  name: 'engram',
   version: '1.0.0',
 })
 

@@ -1,4 +1,4 @@
-# claude-agent-memory
+# engram
 
 > Persistent long-term memory for Claude Code agents — SQLite + FTS5 + MCP on-demand recall, with Chinese tokenization support.
 >
@@ -35,7 +35,7 @@ Claude Code Agent 默认是无状态的。每次 session 重新从零开始，�
 │  recall_memory("query") ──→ MCP Server          │
 │                                  ↓              │
 │                          SQLite + FTS5          │
-│                          (chinatsu.db)          │
+│                          (engram.db)          │
 │                                  ↓              │
 │  ← ranked results (importance × recency)        │
 │                                                 │
@@ -125,9 +125,9 @@ Claude 自己判断是否需要查记忆。大多数 prompt 不需要。只在�
 The `CLAUDE.md` instruction that makes this work:
 
 ```markdown
-## Memory System (chinatsu-memory MCP)
+## Memory System (engram MCP)
 
-You have access to a long-term memory SQLite database via the `chinatsu-memory` MCP server:
+You have access to a long-term memory SQLite database via the `engram` MCP server:
 - `recall_memory(query, limit?, category?)` — retrieve relevant memories
 - `store_memory(content, ...)` — store important information
 
@@ -236,7 +236,7 @@ The tokenizer is optional — the system falls back to character-level FTS5 if t
 
 ```bash
 node index.mjs --stats
-# First run creates chinatsu.db and runs schema migrations automatically
+# First run creates engram.db and runs schema migrations automatically
 ```
 
 ### 4. Register the MCP server / 注册 MCP Server
@@ -308,7 +308,7 @@ memory/
 ├── index.mjs          # Core memory engine (store, recall, context building)
 ├── mcp-server.mjs     # MCP server (exposes tools to Claude)
 ├── schema.sql         # SQLite schema (memories, conversations, FTS5 tables)
-├── chinatsu.db        # SQLite database (created on first run, gitignored)
+├── engram.db        # SQLite database (created on first run, gitignored)
 └── lib/
     └── libsimple-*/   # Platform-specific tokenizer binary + dict
 ```
