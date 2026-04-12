@@ -147,7 +147,7 @@ Do NOT call when:
 
 ---
 
-## Chinese Tokenization / 中文分词
+## Chinese Tokenization / 中文分词 *(Not Required For Non-Chinese Users)*
 
 SQLite's built-in FTS5 tokenizer treats each CJK character as a separate token. For Chinese, this produces AND queries like:
 
