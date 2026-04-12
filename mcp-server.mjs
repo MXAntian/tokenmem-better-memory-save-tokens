@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // ============================================================
-// claude-agent-memory MCP Server
-// 暴露 recall_memory / store_memory / memory_stats 三个工具
-// 让 Claude Code 主会话按需查询，替代 UserPromptSubmit 预注入
+// tokenmem MCP Server
+// Exposes recall_memory / store_memory / memory_stats tools
+// On-demand recall for any MCP-compatible AI agent — saves 80-90% memory token costs
 // ============================================================
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -22,8 +22,8 @@ import {
 initMemory()
 
 const server = new McpServer({
-  name: 'engram',
-  version: '1.0.0',
+  name: 'tokenmem',
+  version: '1.1.0',
 })
 
 // ── 工具：recall_memory ───────────────────────────────────────

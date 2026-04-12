@@ -1,6 +1,7 @@
 // ============================================================
-// claude-agent-memory v1.0 (SQLite + FTS5)
-// 灵感来源：AIRI (moeru-ai/airi) 记忆架构
+// tokenmem v1.1 (SQLite + FTS5)
+// Token-efficient persistent memory for AI agents
+// Inspired by: AIRI (moeru-ai/airi) memory architecture
 //
 // 核心能力：
 //   - 结构化记忆存储（分层 + 分类 + 重要性打分）
@@ -11,7 +12,7 @@
 //   - 可选：向量相似度（JSON 存储，应用层计算余弦距离）
 //
 // 依赖：better-sqlite3（同步 API，高性能）
-// 数据文件：同目录下 engram.db
+// 数据文件：同目录下 tokenmem.db
 // ============================================================
 
 import { readFileSync, existsSync } from 'node:fs'
@@ -21,7 +22,7 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DB_PATH = resolve(__dirname, 'engram.db')
+const DB_PATH = resolve(__dirname, 'tokenmem.db')
 const SCHEMA_PATH = resolve(__dirname, 'schema.sql')
 // wangfenjin/simple 中文分词扩展（Windows x64 预编译）
 const SIMPLE_EXT_DIR = resolve(__dirname, 'lib/libsimple-windows-x64')
