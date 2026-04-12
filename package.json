@@ -1,0 +1,27 @@
+{
+  "name": "claude-agent-memory",
+  "version": "1.0.0",
+  "description": "Persistent long-term memory for Claude Code agents — SQLite + FTS5 + MCP on-demand recall",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node mcp-server.mjs",
+    "stats": "node index.mjs --stats"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "memory",
+    "sqlite",
+    "fts5",
+    "agent",
+    "llm"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^9.0.0",
+    "zod": "^3.0.0"
+  }
+}

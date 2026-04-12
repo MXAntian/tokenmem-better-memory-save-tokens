@@ -1,0 +1,15 @@
+# Database files (personal data)
+*.db
+*.db-shm
+*.db-wal
+*.db.backup-shm
+*.db.backup-wal
+
+# Native tokenizer binaries (download from wangfenjin/simple releases)
+lib/
+
+# Dependencies
+node_modules/
+
+# Misc
+*.zip
