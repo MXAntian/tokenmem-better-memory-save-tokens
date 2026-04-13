@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS memories (
   -- 标签（JSON 数组）
   tags TEXT DEFAULT '[]',
 
+  -- 压缩管线（Myco-inspired）
+  compressed_from TEXT DEFAULT '[]', -- JSON 数组：被压缩合并的源 memory rowid 列表
+  is_compressed INTEGER NOT NULL DEFAULT 0, -- 1 = 此条是压缩产物，不可再被压缩（防级联）
+
   -- 扩展元数据
   metadata TEXT DEFAULT '{}',
 
@@ -166,7 +170,20 @@ CREATE TABLE IF NOT EXISTS goals (
 CREATE INDEX IF NOT EXISTS idx_goal_status ON goals(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_goal_priority ON goals(priority DESC) WHERE deleted_at IS NULL;
 
--- ── 4. 事件记忆表 ──────────────────────────────────────────────
+-- ── 4. 搜索未命中追踪 ────────────────────────────────────────────
+-- 记录查无结果的查询，累积高频 miss = 知识盲区信号
+CREATE TABLE IF NOT EXISTS search_misses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  query TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'recall',  -- recall / search_conversations
+  hit_count INTEGER NOT NULL DEFAULT 0,   -- 0 = 完全未命中
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_miss_query ON search_misses(query);
+CREATE INDEX IF NOT EXISTS idx_miss_created ON search_misses(created_at DESC);
+
+-- ── 5. 事件记忆表 ──────────────────────────────────────────────
 -- 对应 AIRI 的 memory_episodic
 CREATE TABLE IF NOT EXISTS episodes (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

@@ -178,6 +178,31 @@ export function initMemory() {
     log('No embedding API — using FTS5 full-text search only')
   }
 
+  // ── Schema 增量迁移 ───────────────────────────────────────────
+  // 新增列：compressed_from, is_compressed（压缩管线）
+  try {
+    db.exec(`ALTER TABLE memories ADD COLUMN compressed_from TEXT DEFAULT '[]'`)
+    log('Migration: added compressed_from column')
+  } catch {}  // "duplicate column name" = 已存在，忽略
+  try {
+    db.exec(`ALTER TABLE memories ADD COLUMN is_compressed INTEGER NOT NULL DEFAULT 0`)
+    log('Migration: added is_compressed column')
+  } catch {}
+  // 新增表：search_misses（搜索未命中追踪）
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS search_misses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'recall',
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      )
+    `)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_miss_query ON search_misses(query)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_miss_created ON search_misses(created_at DESC)`)
+  } catch {}
+
   // 清理过期记忆
   expireMemories()
 
@@ -313,12 +338,28 @@ export function storeMemory(mem) {
     expiresAt = now + mem.ttlMs
   }
 
+  // 压缩管线支持：compressed_from 标记源记忆，is_compressed 标记产物
+  const compressedFrom = mem.compressedFrom || []
+  const isCompressed = compressedFrom.length > 0 ? 1 : 0
+
+  // 防级联：如果 compressedFrom 包含已是压缩产物的记忆，拒绝（防止幻觉放大）
+  if (compressedFrom.length > 0) {
+    const cascadeCheck = db.prepare(
+      `SELECT rowid FROM memories WHERE rowid IN (${compressedFrom.map(() => '?').join(',')}) AND is_compressed = 1`
+    ).all(...compressedFrom)
+    if (cascadeCheck.length > 0) {
+      log(`storeMemory: 拒绝级联压缩（源中有 ${cascadeCheck.length} 条已是压缩产物）`)
+      return null
+    }
+  }
+
   try {
     const stmt = db.prepare(`
       INSERT INTO memories
         (content, summary, memory_type, category, importance, emotional_impact,
-         source, source_id, source_platform, tags, metadata, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         source, source_id, source_platform, tags, metadata, expires_at,
+         compressed_from, is_compressed)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const info = stmt.run(
       mem.content,
@@ -333,6 +374,8 @@ export function storeMemory(mem) {
       JSON.stringify(mem.tags || []),
       JSON.stringify(mem.metadata || {}),
       expiresAt,
+      JSON.stringify(compressedFrom),
+      isCompressed,
     )
     return info.lastInsertRowid ? String(info.lastInsertRowid) : null
   } catch (e) {
@@ -515,6 +558,14 @@ export function recallMemories(opts = {}) {
     try { updateMany(result) } catch {}
   }
 
+  // 搜索未命中追踪：查了但没找到 = 知识盲区信号
+  if (queryText && result.length === 0) {
+    try {
+      db.prepare('INSERT INTO search_misses (query, source, hit_count) VALUES (?, ?, 0)')
+        .run(queryText.slice(0, 500), 'recall')
+    } catch {}
+  }
+
   return result
 }
 
@@ -584,7 +635,14 @@ export function searchConversations(queryText, opts = {}) {
     anchorParams.push(limit)
 
     const anchors = db.prepare(anchorSQL).all(...anchorParams)
-    if (anchors.length === 0) return []
+    if (anchors.length === 0) {
+      // 搜索未命中追踪
+      try {
+        db.prepare('INSERT INTO search_misses (query, source, hit_count) VALUES (?, ?, 0)')
+          .run(queryText.slice(0, 500), 'search_conversations')
+      } catch {}
+      return []
+    }
 
     // Step 2: AIRI 风格上下文窗口扩展
     const contextStmt = db.prepare(`
@@ -776,6 +834,30 @@ export function getMemoryStats() {
       SELECT COUNT(*) AS count FROM goals WHERE deleted_at IS NULL AND status IN ('planned', 'in_progress')
     `).get()
 
+    // 压缩压力指标：(working + short_term) / max(1, long_term + permanent)
+    // 值 > 1.0 表示临时记忆堆积，需要压缩
+    const raw = (mem?.working || 0) + (mem?.short_term || 0)
+    const terminal = Math.max(1, (mem?.long_term || 0) + (mem?.permanent || 0))
+    const compressionPressure = +(raw / terminal).toFixed(2)
+
+    // 死知识检测：长期/永久记忆中超过 30 天未被访问的
+    const thirtyDaysAgo = Date.now() - 30 * 86400_000
+    const deadKnowledge = db.prepare(`
+      SELECT COUNT(*) AS count FROM memories
+      WHERE deleted_at IS NULL
+        AND memory_type IN ('long_term', 'permanent')
+        AND last_accessed < ?
+    `).get(thirtyDaysAgo)
+
+    // 搜索未命中统计（近 7 天）
+    const sevenDaysAgo = Date.now() - 7 * 86400_000
+    let recentMisses = 0
+    try {
+      recentMisses = db.prepare(
+        'SELECT COUNT(*) AS count FROM search_misses WHERE created_at > ?'
+      ).get(sevenDaysAgo)?.count || 0
+    } catch {}
+
     return {
       memories: {
         total_active: mem?.total_active || 0,
@@ -786,11 +868,132 @@ export function getMemoryStats() {
       },
       conversations: conv?.count || 0,
       activeGoals: goals?.count || 0,
+      compressionPressure,
+      deadKnowledge: deadKnowledge?.count || 0,
+      recentSearchMisses: recentMisses,
       embeddingConfigured: !!_embeddingConfig,
     }
   } catch (e) {
     return { error: e.message }
   }
+}
+
+// ── Session 转录索引（Myco-inspired） ──────────────────────────
+
+/**
+ * 索引 Claude Code session .jsonl 文件到 conversations 表
+ * 扫描 ~/.claude/projects/ 下所有 .jsonl，提取 user + assistant 文本
+ */
+export function indexSessionTranscripts() {
+  const db = getDb()
+  const projectsDir = resolve(process.env.HOME || process.env.USERPROFILE || '', '.claude/projects')
+
+  if (!existsSync(projectsDir)) {
+    log('Session indexing: projects dir not found')
+    return { indexed: 0, skipped: 0 }
+  }
+
+  let indexed = 0, skipped = 0
+
+  // 递归查找所有 .jsonl 文件
+  const { readdirSync, statSync } = require('node:fs')
+  const jsonlFiles = []
+
+  function scanDir(dir) {
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = resolve(dir, entry)
+        try {
+          const st = statSync(full)
+          if (st.isDirectory()) scanDir(full)
+          else if (entry.endsWith('.jsonl')) jsonlFiles.push(full)
+        } catch {}
+      }
+    } catch {}
+  }
+  scanDir(projectsDir)
+
+  const insertStmt = db.prepare(`
+    INSERT OR IGNORE INTO conversations
+      (id, platform, chat_id, from_id, from_name, role, content, created_at, metadata)
+    VALUES (?, 'claude-code', ?, ?, ?, ?, ?, ?, '{}')
+  `)
+
+  const insertMany = db.transaction((msgs) => {
+    for (const m of msgs) {
+      insertStmt.run(m.id, m.chatId, m.fromId, m.fromName, m.role, m.content, m.createdAt)
+    }
+  })
+
+  for (const file of jsonlFiles) {
+    const sessionId = file.match(/([a-f0-9-]{36})\.jsonl$/)?.[1]
+    if (!sessionId) continue
+
+    // 跳过已索引的 session（检查是否有此 chat_id 的记录）
+    const existing = db.prepare('SELECT 1 FROM conversations WHERE chat_id = ? AND platform = ? LIMIT 1')
+      .get(sessionId, 'claude-code')
+    if (existing) { skipped++; continue }
+
+    try {
+      const content = readFileSync(file, 'utf-8')
+      const batch = []
+
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const obj = JSON.parse(line)
+          if (!obj.timestamp || !obj.message?.content) continue
+
+          const ts = new Date(obj.timestamp).getTime()
+          if (isNaN(ts)) continue
+
+          if (obj.type === 'user' && typeof obj.message.content === 'string') {
+            const text = obj.message.content.trim()
+            if (text.length > 0 && text.length < 5000) {
+              batch.push({
+                id: obj.uuid || `cc-${sessionId}-${ts}`,
+                chatId: sessionId,
+                fromId: 'user',
+                fromName: 'user',
+                role: 'user',
+                content: text,
+                createdAt: ts,
+              })
+            }
+          } else if (obj.type === 'assistant') {
+            // assistant content 是 JSON 数组，提取 text 块
+            const blocks = Array.isArray(obj.message.content) ? obj.message.content : []
+            const textParts = blocks
+              .filter(b => b.type === 'text' && b.text)
+              .map(b => b.text.trim())
+              .filter(t => t.length > 0)
+            const fullText = textParts.join('\n').slice(0, 5000)
+            if (fullText.length > 0) {
+              batch.push({
+                id: obj.uuid || `cc-${sessionId}-${ts}`,
+                chatId: sessionId,
+                fromId: 'assistant',
+                fromName: 'claude',
+                role: 'assistant',
+                content: fullText,
+                createdAt: ts,
+              })
+            }
+          }
+        } catch {}
+      }
+
+      if (batch.length > 0) {
+        insertMany(batch)
+        indexed++
+        log(`Session indexed: ${sessionId} (${batch.length} messages)`)
+      }
+    } catch (e) {
+      log(`Session index failed for ${sessionId}: ${e.message}`)
+    }
+  }
+
+  return { indexed, skipped, totalFiles: jsonlFiles.length }
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────

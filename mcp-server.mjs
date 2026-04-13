@@ -15,6 +15,7 @@ import {
   storeMemory,
   buildMemoryContext,
   getMemoryStats,
+  indexSessionTranscripts,
   closeMemory,
 } from './index.mjs'
 
@@ -92,6 +93,9 @@ server.tool(
       `  working: ${stats.memories.working} | short_term: ${stats.memories.short_term} | long_term: ${stats.memories.long_term} | permanent: ${stats.memories.permanent}`,
       `对话记录: ${stats.conversations} 条`,
       `活跃目标: ${stats.activeGoals} 个`,
+      `压缩压力: ${stats.compressionPressure} ${stats.compressionPressure > 1 ? '⚠️ 临时记忆堆积，建议压缩' : '✓ 正常'}`,
+      `死知识 (30d 未访问): ${stats.deadKnowledge} 条${stats.deadKnowledge > 10 ? ' ⚠️ 建议清理' : ''}`,
+      `近 7 天搜索未命中: ${stats.recentSearchMisses} 次${stats.recentSearchMisses > 5 ? ' ⚠️ 存在知识盲区' : ''}`,
       `向量搜索: ${stats.embeddingConfigured ? '已配置' : '未配置（使用 FTS5）'}`,
     ].join('\n')
     return { content: [{ type: 'text', text }] }
