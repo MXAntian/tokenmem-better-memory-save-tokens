@@ -1,13 +1,12 @@
 {
   "name": "tokenmem",
   "version": "2.0.0",
-  "description": "Token-efficient persistent memory for AI agents — SQLite + FTS5 + sqlite-vec hybrid search + Memory Transfer Learning + MCP on-demand recall. Save 80-90% memory-related token costs.",
+  "description": "Token-efficient persistent memory for AI agents — SQLite + FTS5 + sqlite-vec hybrid search + MCP on-demand recall. Save 80-90% memory-related token costs.",
   "type": "module",
   "main": "index.mjs",
   "scripts": {
     "start": "node mcp-server.mjs",
-    "stats": "node index.mjs --stats",
-    "backfill": "node backfill-embeddings.mjs"
+    "stats": "node index.mjs --stats"
   },
   "keywords": [
     "mcp",
@@ -17,15 +16,15 @@
     "sqlite",
     "fts5",
     "sqlite-vec",
-    "hybrid-search",
-    "memory-transfer-learning",
+    "vector-search",
+    "hybrid-retrieval",
+    "rrf",
     "claude-code",
     "cursor",
     "windsurf",
     "llm",
     "on-demand-recall",
-    "compression",
-    "rrf-fusion"
+    "memory-transfer-learning"
   ],
   "license": "MIT",
   "dependencies": {

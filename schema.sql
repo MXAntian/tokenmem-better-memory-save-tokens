@@ -1,27 +1,27 @@
 -- ============================================================
--- tokenmem Schema v2.0 (SQLite + FTS5 + sqlite-vec)
+-- tokenmem Schema v2.0 (SQLite + FTS5)
 -- Inspired by: AIRI (moeru-ai/airi) memory architecture
 --
 -- Design principles:
 --   1. Structured layered memory (working -> short_term -> long_term -> permanent)
---   2. FTS5 full-text search (built-in, no extensions needed)
---   3. Composite scoring in application layer (AIRI-style: 1.2x semantic + 0.2x time decay)
+--   2. FTS5 full-text search (built-in, no extensions required)
+--   3. Composite scoring computed in application layer (AIRI-style)
 --   4. Pure local SQLite, zero infrastructure dependency
---   5. Optional: sqlite-vec for KNN vector search
+--   5. Optional vector similarity via sqlite-vec extension
 --   6. Memory Transfer Learning: 3-tier abstraction levels
 -- ============================================================
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
--- -- 1. Core memory table -------------------------------------------------
+-- ── 1. Core Memory Table ────────────────────────────────────
 -- Inspired by AIRI's memory_fragments
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   content TEXT NOT NULL CHECK (length(content) > 0),
   summary TEXT,
 
-  -- Layered & categorized (AIRI core design)
+  -- Layers & categories (AIRI core design)
   memory_type TEXT NOT NULL DEFAULT 'working'
     CHECK (memory_type IN ('working', 'short_term', 'long_term', 'permanent')),
   category TEXT NOT NULL DEFAULT 'general'
@@ -41,21 +41,21 @@ CREATE TABLE IF NOT EXISTS memories (
   -- Tags (JSON array)
   tags TEXT DEFAULT '[]',
 
-  -- Compression pipeline (Myco-inspired)
+  -- Compression pipeline
   compressed_from TEXT DEFAULT '[]', -- JSON array: source memory rowids that were compressed into this
-  is_compressed INTEGER NOT NULL DEFAULT 0, -- 1 = this is a compression product, cannot be re-compressed (prevent cascade)
+  is_compressed INTEGER NOT NULL DEFAULT 0, -- 1 = compression product, cannot be re-compressed (anti-cascade)
 
   -- Abstraction level (Memory Transfer Learning, arxiv 2604.14004)
-  -- concrete_trace: specific operation record (low weight, prone to negative transfer)
+  -- concrete_trace: specific operation logs (low weight, prone to negative transfer)
   -- semi_abstract:  semi-abstract description (default, medium weight)
-  -- meta_knowledge: pattern/method/heuristic (high weight, most effective cross-domain)
+  -- meta_knowledge: patterns/heuristics (high weight, most effective cross-context)
   memory_level TEXT NOT NULL DEFAULT 'semi_abstract'
     CHECK (memory_level IN ('concrete_trace', 'semi_abstract', 'meta_knowledge')),
 
   -- Extended metadata
   metadata TEXT DEFAULT '{}',
 
-  -- Vector (JSON array, optional, for application-layer cosine similarity or sqlite-vec)
+  -- Vector (JSON array, optional, application-layer cosine similarity)
   content_vector TEXT,
 
   -- Timestamps & access stats
@@ -77,9 +77,9 @@ CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed DESC) WHER
 CREATE INDEX IF NOT EXISTS idx_mem_source ON memories(source_platform, source) WHERE deleted_at IS NULL;
 
 -- FTS5 virtual table (full-text search)
--- tokenize='simple 0': wangfenjin/simple extension for Chinese word-level tokenization (optional)
--- Requires: loadExtension('libsimple') + jieba_dict(dictPath)
--- Without simple extension: default FTS5 tokenizer works for English and other languages
+-- tokenize='simple 0': wangfenjin/simple extension for Chinese word-level segmentation
+-- Requires loadExtension('libsimple-windows-x64/simple') + jieba_dict(dictPath)
+-- Falls back to default FTS5 tokenizer if simple extension is not available
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   content,
   summary,
@@ -89,7 +89,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   tokenize='simple 0'
 );
 
--- Sync triggers: memories INSERT/DELETE/UPDATE -> FTS index auto-updated
+-- Sync triggers: memories INSERT/DELETE/UPDATE -> FTS index auto-update
 CREATE TRIGGER IF NOT EXISTS trg_mem_fts_insert AFTER INSERT ON memories BEGIN
   INSERT INTO memories_fts(rowid, content, summary, tags)
   VALUES (new.rowid, new.content, new.summary, new.tags);
@@ -107,7 +107,7 @@ CREATE TRIGGER IF NOT EXISTS trg_mem_fts_update AFTER UPDATE OF content, summary
   VALUES (new.rowid, new.content, new.summary, new.tags);
 END;
 
--- -- 2. Conversation log table --------------------------------------------
+-- ── 2. Conversation Log Table ───────────────────────────────
 -- Inspired by AIRI's chat_messages
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -158,7 +158,7 @@ CREATE TRIGGER IF NOT EXISTS trg_conv_fts_update AFTER UPDATE OF content ON conv
   VALUES (new.rowid, new.content, new.from_name);
 END;
 
--- -- 3. Goal tracking table -----------------------------------------------
+-- ── 3. Goal Tracking Table ──────────────────────────────────
 -- Inspired by AIRI's memory_long_term_goals
 CREATE TABLE IF NOT EXISTS goals (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -179,8 +179,8 @@ CREATE TABLE IF NOT EXISTS goals (
 CREATE INDEX IF NOT EXISTS idx_goal_status ON goals(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_goal_priority ON goals(priority DESC) WHERE deleted_at IS NULL;
 
--- -- 4. Search miss tracking ----------------------------------------------
--- Track queries with no results — high-frequency misses signal knowledge blind spots
+-- ── 4. Search Miss Tracking ─────────────────────────────────
+-- Records queries with no results; high-frequency misses = knowledge blind spots
 CREATE TABLE IF NOT EXISTS search_misses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   query TEXT NOT NULL,
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS search_misses (
 CREATE INDEX IF NOT EXISTS idx_miss_query ON search_misses(query);
 CREATE INDEX IF NOT EXISTS idx_miss_created ON search_misses(created_at DESC);
 
--- -- 5. Episodic memory table ---------------------------------------------
+-- ── 5. Episodic Memory Table ────────────────────────────────
 -- Inspired by AIRI's memory_episodic
 CREATE TABLE IF NOT EXISTS episodes (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
