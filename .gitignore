@@ -5,11 +5,14 @@
 *.db.backup-shm
 *.db.backup-wal
 
-# Native tokenizer binaries (download from wangfenjin/simple releases)
+# Native extension binaries (download from releases)
 lib/
 
 # Dependencies
 node_modules/
+
+# Environment files (may contain API keys)
+.env*
 
 # Misc
 *.zip

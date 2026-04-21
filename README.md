@@ -2,17 +2,12 @@
 
 > **Save 80-90% memory-related token costs.** Persistent long-term memory for AI agents via MCP — on-demand recall instead of always-inject.  
 > **Works with any MCP-compatible agent**: Claude Code, Cursor, Windsurf, Cline, Continue, and more.
->
-> **节省 80-90% 记忆相关 token 开销。** 通过 MCP 为 AI Agent 提供持久化长期记忆——按需召回，不再每次都注入。  
-> **适用于所有支持 MCP 的 AI Agent**：Claude Code、Cursor、Windsurf、Cline、Continue 等。
 
 ---
 
-## The Problem: Memory Costs Tokens / 问题：记忆 = Token 开销
+## The Problem: Memory Costs Tokens
 
 AI agents are stateless. The common fix is injecting a context file on every prompt — but that means you pay token costs on **every single message**, even when the agent already knows the answer.
-
-AI Agent 是无状态的。常见方案是每条 prompt 都注入上下文文件——但这意味着**每一条消息都要消耗 token**，即使 Agent 已经知道答案。
 
 **How much does this waste?**
 
@@ -23,11 +18,67 @@ AI Agent 是无状态的。常见方案是每条 prompt 都注入上下文文件
 
 Most prompts don't need historical memory. tokenmem lets the agent decide when to look things up — saving **80-90% of memory-related token costs**.
 
-大多数 prompt 不需要历史记忆。tokenmem 让 Agent 自己决定何时查询——节省 **80-90% 的记忆相关 token 开销**。
+---
+
+## What's New in v2.0
+
+### Memory Transfer Learning
+
+Inspired by research on cross-context memory reuse (arxiv 2604.14004), memories now have 3 abstraction tiers:
+
+| Level | Recall Weight | Description | Example |
+|-------|--------------|-------------|---------|
+| `meta_knowledge` | 1.3x | Patterns, heuristics, reusable principles | "When X happens, do Y" |
+| `semi_abstract` | 1.0x | Semi-abstract with some context (default) | "Project X uses approach Y because Z" |
+| `concrete_trace` | 0.7x | Specific operation logs | "On 04-16, ran migration script" |
+
+**Key insight**: Concrete traces have low cross-context reuse value and can cause negative transfer. The system automatically weights meta-knowledge higher during recall, so distilled patterns surface above raw event logs.
+
+### sqlite-vec Hybrid Search (FTS5 + KNN + RRF)
+
+When configured with an embedding API, tokenmem now runs **dual-path retrieval**:
+
+1. **FTS5 path**: Keyword/lexical matching (fast, exact)
+2. **Vector path**: Semantic matching via sqlite-vec KNN (synonyms, paraphrases)
+3. **RRF fusion**: Reciprocal Rank Fusion merges both result sets fairly using only rank positions (no scale normalization needed)
+
+Falls back gracefully to FTS5-only when sqlite-vec or embedding API is not configured.
+
+**Performance**: ~150ms total (FTS5 <10ms + one embedding API call ~120ms). sqlite-vec KNN is sub-millisecond locally.
+
+### Compression Pipeline
+
+Old conversation segments can be automatically compressed into summary memories:
+
+- Uses a fast LLM (e.g., Claude Haiku) for summarization
+- Tracks `compressed_from` source rowids for traceability
+- Anti-cascade protection: compressed memories cannot be re-compressed (prevents hallucination amplification)
+- Triggers: CLI command, hooks, or manual invocation
+
+**Note**: In practice, we find that ingesting compact summaries from Claude Code's built-in `/compact` feature (via the SessionStart hook) is simpler and more effective than running a separate compression pipeline. Both approaches are supported.
+
+### Compact Summary Ingestion
+
+tokenmem can ingest summaries from Claude Code's `/compact` feature:
+
+```bash
+# Triggered by SessionStart hook when source=compact
+TOKENMEM_COMPACT_SUMMARY="..." TOKENMEM_COMPACT_SESSION="session-id" \
+  node index.mjs --store-compact-summary
+```
+
+This captures session knowledge automatically when Claude Code compacts context, creating a durable long-term memory from what would otherwise be lost.
+
+### Breaking Changes
+
+- `buildMemoryContext()` is now **async** (returns `Promise<string>`)
+- `storeMemoryAsync()` now writes to the sqlite-vec virtual table when available
+- New `memory_level` parameter in MCP `store_memory` tool
+- DB path configurable via `TOKENMEM_DB_PATH` environment variable
 
 ---
 
-## How It Works / 工作原理
+## How It Works
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -42,14 +93,16 @@ Most prompts don't need historical memory. tokenmem lets the agent decide when t
 │         (0 extra tokens)       ↓               │
 │                          MCP Server            │
 │                              ↓                 │
-│                       SQLite + FTS5            │
-│                       (tokenmem.db)              │
+│                    FTS5 + sqlite-vec KNN       │
+│                    + RRF fusion scoring        │
+│                       (tokenmem.db)            │
 │                              ↓                 │
 │                    ← ranked results            │
 │                                                │
-│  store_memory("important fact") → MCP Server   │
+│  store_memory("important fact",                │
+│    level: "meta_knowledge") → MCP Server       │
 │                                      ↓         │
-│                              INSERT INTO DB    │
+│                     INSERT + embedding → vec   │
 └────────────────────────────────────────────────┘
 ```
 
@@ -57,19 +110,17 @@ Most prompts don't need historical memory. tokenmem lets the agent decide when t
 
 | Tool | Purpose |
 |------|---------|
-| `recall_memory(query)` | Search memories by relevance (FTS5 + composite scoring) |
-| `store_memory(content)` | Store a fact, decision, preference, or insight |
-| `memory_stats()` | Get memory system statistics |
+| `recall_memory(query, limit?, category?)` | Hybrid search: FTS5 + vector KNN + RRF fusion scoring |
+| `store_memory(content, level?, ...)` | Store with abstraction level (meta_knowledge / semi_abstract / concrete_trace) |
+| `memory_stats()` | Stats including compression pressure, dead knowledge, search miss rate |
 
 ---
 
-## Why MCP Makes This Universal / 为什么 MCP 让它通用
+## Why MCP Makes This Universal
 
 tokenmem is a standard **MCP server** using stdio transport. Any AI agent or IDE that supports the [Model Context Protocol](https://modelcontextprotocol.io/) can connect to it — no code changes needed.
 
-tokenmem 是标准的 **MCP Server**（stdio 传输）。任何支持 [Model Context Protocol](https://modelcontextprotocol.io/) 的 AI Agent 或 IDE 都可以直接连接，无需改代码。
-
-**Tested with / 已验证：**
+**Tested with:**
 
 | Agent | Setup |
 |-------|-------|
@@ -78,15 +129,11 @@ tokenmem 是标准的 **MCP Server**（stdio 传输）。任何支持 [Model Con
 | Windsurf | Add to MCP server config |
 | Cline / Continue | Add to MCP settings |
 
-The agent calls `recall_memory()` / `store_memory()` like any other MCP tool. Memory persists in a local SQLite file across all sessions.
-
-Agent 像调用其他 MCP 工具一样调用 `recall_memory()` / `store_memory()`。记忆持久化在本地 SQLite 文件中，跨所有 session 可用。
-
 ---
 
-## Features / 功能特性
+## Features
 
-### Memory Layers with Auto-Promotion / 记忆分层 + 自动晋升
+### Memory Layers with Auto-Promotion
 
 | Layer | TTL | Auto-promotes when |
 |-------|-----|--------------------|
@@ -95,65 +142,91 @@ Agent 像调用其他 MCP 工具一样调用 `recall_memory()` / `store_memory()
 | `long_term` | No expiry | — |
 | `permanent` | No expiry, no deletion | — |
 
-Working memory expires automatically. Important memories get promoted to long-term storage based on access patterns — no manual curation needed.
-
-### Composite Scoring / 复合打分
-
-Recall results are ranked by:
+### Composite Scoring (AIRI-inspired)
 
 ```
 score = FTS_relevance (40%) + importance (30%) + recency (20%) + access_frequency (10%)
 ```
 
-Inspired by the [AIRI](https://github.com/moeru-ai/airi) memory architecture[^1]. Recent, important, frequently-accessed memories rank higher.
+With Memory Transfer Learning overlay:
+```
+final_score = base_score × level_weight
+  where level_weight = { meta_knowledge: 1.3, semi_abstract: 1.0, concrete_trace: 0.7 }
+```
 
-### 9 Memory Categories / 9 种分类
+In hybrid mode (FTS5 + vector):
+```
+score = (RRF_score × 0.7 + importance × 0.2 + recency × 0.1) × level_weight
+```
+
+### 9 Memory Categories
 
 `general` · `people` · `project` · `decision` · `feedback` · `bug` · `relationship` · `skill` · `preference`
 
-Filter recall by category for precision: `recall_memory({ query: "...", category: "preference" })`.
+### Chinese Tokenization *(Optional)*
 
-### Chinese Tokenization *(Optional)* / 中文分词（可选）
-
-Built-in support for Chinese via [wangfenjin/simple](https://github.com/wangfenjin/simple)[^2] — a native SQLite extension using cppjieba for word-level segmentation. Falls back gracefully to character-level FTS5 if the extension isn't installed.
-
-Includes stop-word filtering and AND→OR query rewriting for high recall without false positives.
+Built-in support for Chinese via [wangfenjin/simple](https://github.com/wangfenjin/simple) — a native SQLite extension using cppjieba for word-level segmentation. Falls back gracefully to character-level FTS5 if the extension isn't installed.
 
 **Non-Chinese users: skip this entirely.** The default FTS5 tokenizer works well for English and other languages.
 
-### Optional Embedding Support / 可选向量支持
+### Health Metrics
 
-Set `EMBEDDING_API_BASE_URL` + `EMBEDDING_API_KEY` to enable OpenAI-compatible embeddings. The schema includes `content_vector` columns ready for cosine similarity search. Works without embeddings — FTS5 handles most recall needs.
+`memory_stats()` now reports:
+- **Compression pressure**: ratio of temporary to permanent memories (>1.0 = piling up)
+- **Dead knowledge**: long-term memories not accessed in 30 days
+- **Search miss rate**: queries that returned zero results (knowledge blind spots)
 
 ---
 
-## Quick Start / 快速开始
+## Quick Start
 
 ### Prerequisites
 
 - Node.js 18+
 - Any MCP-compatible AI agent
 
-### Install / 安装
+### Optional Native Extensions
+
+For enhanced functionality, you can add these SQLite extensions (place in `lib/` directory):
+
+- **[sqlite-vec](https://github.com/asg017/sqlite-vec)**: KNN vector search for hybrid retrieval
+- **[wangfenjin/simple](https://github.com/wangfenjin/simple)**: Chinese word-level tokenization
+
+Both are optional — tokenmem works fully with just FTS5 out of the box.
+
+### Install
 
 ```bash
-git clone https://github.com/MXAntian/tokenmem.git
-cd tokenmem
+git clone https://github.com/MXAntian/tokenmem-better-memory-save-tokens.git
+cd tokenmem-better-memory-save-tokens
 npm install
 ```
 
-### Initialize / 初始化
+### Configure Embeddings (Optional)
+
+For hybrid search (FTS5 + vector), set these environment variables:
+
+```bash
+export EMBEDDING_API_BASE_URL="https://api.openai.com/v1"  # or any OpenAI-compatible API
+export EMBEDDING_API_KEY="your-key"
+export EMBEDDING_MODEL="text-embedding-3-small"  # default
+export EMBEDDING_DIMENSION="1536"  # default
+```
+
+You can also put these in a `.env.local` file in the project root.
+
+### Initialize
 
 ```bash
 node index.mjs --stats
 # Creates tokenmem.db on first run
 ```
 
-### Connect to Your Agent / 连接到你的 Agent
+### Connect to Your Agent
 
 **Claude Code:**
 ```bash
-claude mcp add --scope user tokenmem -- node /absolute/path/to/tokenmem/mcp-server.mjs
+claude mcp add --scope user tokenmem -- node /absolute/path/to/mcp-server.mjs
 ```
 
 **Cursor / Windsurf / Other MCP clients:**
@@ -162,13 +235,13 @@ claude mcp add --scope user tokenmem -- node /absolute/path/to/tokenmem/mcp-serv
   "mcpServers": {
     "tokenmem": {
       "command": "node",
-      "args": ["/absolute/path/to/tokenmem/mcp-server.mjs"]
+      "args": ["/absolute/path/to/mcp-server.mjs"]
     }
   }
 }
 ```
 
-### Add Agent Instructions / 添加 Agent 指令
+### Add Agent Instructions
 
 Add to your agent's system instructions (e.g., `CLAUDE.md`, `.cursorrules`, etc.):
 
@@ -177,7 +250,7 @@ Add to your agent's system instructions (e.g., `CLAUDE.md`, `.cursorrules`, etc.
 
 You have access to a persistent memory database via the `tokenmem` MCP server:
 - `recall_memory(query, limit?, category?)` — retrieve relevant memories
-- `store_memory(content, summary?, importance?, memory_type?, category?, tags?)` — store important info
+- `store_memory(content, summary?, importance?, memory_type?, memory_level?, category?, tags?)` — store important info
 - `memory_stats()` — view statistics
 
 ### When to call recall_memory
@@ -192,11 +265,19 @@ Skip:
 - Current context already has the answer
 - Pure technical question unrelated to stored knowledge
 - Already queried the same topic in this session
+
+### Memory Level Guidelines
+When storing memories, prefer higher abstraction levels:
+- `meta_knowledge` (preferred): Patterns, principles, heuristics — "When X happens, do Y"
+- `semi_abstract` (default): Description with some context — "Project uses X because Y"
+- `concrete_trace` (last resort): Specific operation logs — "Ran script X on date Y"
+
+Distill experiences into reusable patterns whenever possible.
 ```
 
 ---
 
-## CLI Usage / 命令行
+## CLI Usage
 
 tokenmem also works as a standalone CLI tool — useful for hooks, scripts, and debugging:
 
@@ -207,35 +288,64 @@ node index.mjs --stats
 # Recall memories
 node index.mjs --recall "food preferences" --limit 5
 
-# Store a memory
-node index.mjs --store "User prefers dark mode" --importance 7 --type long_term --category preference
+# Store a memory with abstraction level
+node index.mjs --store "When encountering X, always check Y first" \
+  --importance 8 --type long_term --category skill \
+  --level meta_knowledge
 
 # Build context for injection (useful in hooks)
-node index.mjs --context "current project status" --limit 10
+node index.mjs --context "current project status"
+
+# Compress old conversations (requires claude CLI)
+node index.mjs --compress <chat_id> --days 30
+node index.mjs --compress-all
+
+# Ingest compact summary (called by SessionStart hook)
+TOKENMEM_COMPACT_SUMMARY="..." node index.mjs --store-compact-summary
+
+# Backfill embeddings for existing memories
+node backfill-embeddings.mjs --concurrency 3
+node backfill-embeddings.mjs --dry-run  # count only
 ```
 
 ---
 
-## File Structure / 文件结构
+## Utilities
+
+### `backfill-embeddings.mjs`
+
+Batch-generates embedding vectors for existing memories that don't have them yet. Useful when first enabling vector search on an existing database.
+
+### `migrate-claude-memories.mjs`
+
+Imports Claude Code's auto-memory `.md` files (`~/.claude/projects/*/memory/*.md`) into the SQLite database. Idempotent — safe to re-run. Does not delete original files.
+
+---
+
+## File Structure
 
 ```
 tokenmem/
-├── mcp-server.mjs     # MCP server entry point (stdio transport)
-├── index.mjs          # Core engine: store, recall, scoring, layers
-├── schema.sql         # SQLite schema (memories, conversations, FTS5)
-├── package.json       # 3 dependencies only
-├── tokenmem.db        # SQLite database (auto-created, gitignored)
-└── lib/               # Optional: Chinese tokenizer binary + dict
+├── mcp-server.mjs              # MCP server entry point (stdio transport)
+├── index.mjs                   # Core engine: store, recall, hybrid search, compression
+├── schema.sql                  # SQLite schema (memories, conversations, FTS5, goals)
+├── package.json                # 3 dependencies only
+├── backfill-embeddings.mjs     # Batch embedding backfill script
+├── migrate-claude-memories.mjs # Claude auto-memory migration tool
+├── tokenmem.db                 # SQLite database (auto-created, gitignored)
+└── lib/                        # Optional: native extension binaries (gitignored)
+    ├── libsimple-windows-x64/  #   Chinese tokenizer (wangfenjin/simple)
+    └── sqlite-vec-windows-x64/ #   Vector search (asg017/sqlite-vec)
 ```
 
-**~1,000 lines of code. 3 dependencies. No build step.**
+**~1,600 lines of code. 3 dependencies. No build step.**
 
 ---
 
-## Design Decisions / 设计决策
+## Design Decisions
 
 **Why SQLite, not a vector database?**  
-For personal agent memory, FTS5 provides sufficient semantic recall without operational overhead. Embedding support is ready when needed (`content_vector` column exists).
+For personal agent memory, FTS5 + sqlite-vec provides sufficient semantic recall without operational overhead. The hybrid approach (FTS5 for exact matching + sqlite-vec for semantic) covers both query styles.
 
 **Why on-demand, not pre-injection?**  
 Pre-injection wastes tokens on every message. On-demand lets the agent skip the lookup when it already has the answer — which is most of the time.
@@ -243,28 +353,40 @@ Pre-injection wastes tokens on every message. On-demand lets the agent skip the 
 **Why MCP, not a custom API?**  
 MCP is the emerging standard for agent-tool communication. One implementation works across Claude Code, Cursor, Windsurf, and any future MCP-compatible agent.
 
----
+**Why Memory Transfer Learning?**  
+Research shows that concrete execution traces transfer poorly across contexts and can even cause negative transfer. By automatically weighting meta-knowledge higher during recall, the system surfaces reusable patterns over raw event logs.
 
-**为什么用 SQLite？** 对个人 Agent 记忆，FTS5 的语义召回足够用，不需要向量库的运维成本。
-
-**为什么按需召回？** 预注入每条消息都浪费 token。按需让 Agent 跳过不需要的查询——大多数时候都不需要。
-
-**为什么用 MCP？** MCP 是 Agent 工具通信的新兴标准。一次实现，跨所有 MCP 兼容 Agent 使用。
+**Why RRF for hybrid search?**  
+Reciprocal Rank Fusion uses only rank positions, not raw scores. This means FTS5 BM25 scores and vector distances — which have completely different scales — can be merged fairly without normalization.
 
 ---
 
-## References / 参考资料
+## Environment Variables
 
-[^1]: [moeru-ai/airi](https://github.com/moeru-ai/airi) — Memory architecture inspiration (composite scoring model).
-
-[^2]: [wangfenjin/simple](https://github.com/wangfenjin/simple) — Chinese tokenizer for SQLite FTS5 (cppjieba-based, prebuilt binaries available).
-
-[^3]: [SQLite FTS5](https://www.sqlite.org/fts5.html) — Full-text search extension with BM25 ranking.
-
-[^4]: [Model Context Protocol](https://modelcontextprotocol.io/) — The standard for agent-tool communication.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TOKENMEM_DB_PATH` | `./tokenmem.db` | Path to SQLite database |
+| `EMBEDDING_API_BASE_URL` | — | OpenAI-compatible embedding API base URL |
+| `EMBEDDING_API_KEY` | — | API key for embedding service |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
+| `EMBEDDING_DIMENSION` | `1536` | Vector dimension |
+| `CLAUDE_BIN` | `claude` | Path to Claude CLI (for compression pipeline) |
+| `TOKENMEM_COMPACT_SUMMARY` | — | Compact summary text (for SessionStart hook) |
+| `TOKENMEM_COMPACT_SESSION` | — | Session ID for compact summary |
 
 ---
 
-## License / 许可证
+## References
+
+- [moeru-ai/airi](https://github.com/moeru-ai/airi) — Memory architecture inspiration (composite scoring model)
+- [wangfenjin/simple](https://github.com/wangfenjin/simple) — Chinese tokenizer for SQLite FTS5 (cppjieba-based)
+- [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) — SQLite vector search extension
+- [SQLite FTS5](https://www.sqlite.org/fts5.html) — Full-text search extension with BM25 ranking
+- [Model Context Protocol](https://modelcontextprotocol.io/) — The standard for agent-tool communication
+- [Memory Transfer Learning (arxiv 2604.14004)](https://arxiv.org/abs/2604.14004) — Cross-context memory reuse research
+
+---
+
+## License
 
 MIT
