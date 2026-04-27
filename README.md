@@ -2,9 +2,11 @@
 
 > **Save 80-90% memory-related token costs.** Persistent long-term memory for AI agents via MCP — on-demand recall instead of always-inject.  
 > **Works with any MCP-compatible agent**: Claude Code, Cursor, Windsurf, Cline, Continue, and more.
+> **Both stdio and HTTP transports supported** — HTTP recommended for multi-session use to avoid zombie process buildup.
 >
 > **节省 80-90% 记忆相关 token 开销。** 通过 MCP 为 AI Agent 提供持久化长期记忆——按需召回，不再每次都注入。  
-> **适用于所有支持 MCP 的 AI Agent**：Claude Code、Cursor、Windsurf、Cline、Continue 等。
+> **适用于所有支持 MCP 的 AI Agent**：Claude Code、Cursor、Windsurf、Cline、Continue 等。  
+> **同时支持 stdio 和 HTTP transport**——多 session 场景推荐 HTTP，避免僵尸进程堆积。
 
 ---
 
@@ -124,6 +126,69 @@ Includes stop-word filtering and AND→OR query rewriting for high recall withou
 ### Optional Embedding Support / 可选向量支持
 
 Set `EMBEDDING_API_BASE_URL` + `EMBEDDING_API_KEY` to enable OpenAI-compatible embeddings. The schema includes `content_vector` columns ready for cosine similarity search. Works without embeddings — FTS5 handles most recall needs.
+
+### HTTP Transport (Recommended for Multi-Session) / HTTP 传输（多 session 推荐）
+
+> **Added 2026-04**: tokenmem now supports both **stdio** (default, simple) and **HTTP Streamable** transport. HTTP is **strongly recommended** if you run multiple agent sessions concurrently.
+
+**Why this matters / 为什么重要：**
+
+With **stdio transport**, each agent session spawns its own `mcp-server.mjs` child process — they each open their own SQLite connection. Sessions don't always notify the server cleanly when they exit (the client just closes stdio and walks away), so child processes pile up. We've observed **13 zombie processes** in the wild after a few days of normal use, all fighting for the same SQLite WAL write lock. The result is the dreaded "MCP available → no longer available" flapping.
+
+stdio 模式下每个 agent session 各 spawn 一个 `mcp-server.mjs` 子进程，各自持 SQLite 连接。session 退出时通常只断 stdio 不发信号，子进程不知道 client 死了 → 僵尸进程堆积（实测正常用几天积 13 个），它们争同一把 SQLite WAL 写锁 → MCP "available → unavailable" 反复跳。
+
+**HTTP transport solves this structurally / HTTP 模式从结构上解决：**
+
+| | stdio | HTTP |
+|--|---|---|
+| OS processes | N (one per session) | **1 (long-lived)** |
+| SQLite connections | N (lock contention) | **1 (no contention)** |
+| Restart on crash | manual | **client auto-reconnect (5× exp backoff)** |
+| Cross-machine reuse | impossible | **change `url` and go** |
+| Setup | trivial | one extra step (long-lived process) |
+
+**Start the HTTP server:**
+
+```bash
+node mcp-server.mjs --transport=http --port=18792
+# Listening on http://127.0.0.1:18792/mcp
+# Health: http://127.0.0.1:18792/health
+```
+
+The server **only binds to 127.0.0.1** (per [MCP spec](https://modelcontextprotocol.io/specification/draft/basic/transports#security-warning) to prevent DNS rebinding) and validates the `Origin` header.
+
+**Connect from your agent:**
+
+```json
+{
+  "mcpServers": {
+    "tokenmem": {
+      "type": "http",
+      "url": "http://127.0.0.1:18792/mcp"
+    }
+  }
+}
+```
+
+Or via Claude Code CLI:
+```bash
+claude mcp add --scope user --transport http tokenmem http://127.0.0.1:18792/mcp
+```
+
+**Keep the server alive across reboots:** add a startup task (Windows: `schtasks`; macOS: `launchd`; Linux: `systemd --user`) pointing at:
+
+```bash
+node /absolute/path/to/tokenmem/mcp-server.mjs --transport=http --port=18792
+```
+
+**Health check from a hook / shell:**
+
+```bash
+curl -s http://127.0.0.1:18792/health
+# {"ok":true,"server":"chinatsu-memory","version":"1.1.0","transport":"http","active_sessions":3}
+```
+
+The HTTP transport uses **stateful per-session mode** internally (each agent gets a `Mcp-Session-Id`-keyed transport in an in-process Map) — this is required by the MCP SDK's design (one `Server` instance per transport). All sessions share the same OS process, the same SQLite connection, and the same loaded extensions. The per-session JS objects are a few KB each, no extra processes, no extra locks.
 
 ---
 
