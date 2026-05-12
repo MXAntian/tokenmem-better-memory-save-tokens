@@ -185,7 +185,7 @@ node /absolute/path/to/tokenmem/mcp-server.mjs --transport=http --port=18792
 
 ```bash
 curl -s http://127.0.0.1:18792/health
-# {"ok":true,"server":"chinatsu-memory","version":"1.1.0","transport":"http","active_sessions":3}
+# {"ok":true,"server":"tokenmem","version":"1.1.0","transport":"http","active_sessions":3}
 ```
 
 The HTTP transport uses **stateful per-session mode** internally (each agent gets a `Mcp-Session-Id`-keyed transport in an in-process Map) — this is required by the MCP SDK's design (one `Server` instance per transport). All sessions share the same OS process, the same SQLite connection, and the same loaded extensions. The per-session JS objects are a few KB each, no extra processes, no extra locks.

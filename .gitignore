@@ -1,9 +1,12 @@
-# Database files (personal data)
+# Database files (personal data) — DO NOT relax these patterns
 *.db
 *.db-shm
 *.db-wal
 *.db.backup-shm
 *.db.backup-wal
+*.db.bak
+*.db.bak-*
+*.db.bak.*
 
 # Native tokenizer binaries (download from wangfenjin/simple releases)
 lib/

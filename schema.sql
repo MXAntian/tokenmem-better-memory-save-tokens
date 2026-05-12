@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS memories (
 
   -- 来源追踪
   source TEXT NOT NULL DEFAULT 'conversation'
-    CHECK (source IN ('conversation', 'observation', 'manual', 'extraction')),
+    CHECK (source IN ('conversation', 'observation', 'manual', 'extraction', 'compression')),
   source_id TEXT,
   source_platform TEXT DEFAULT 'feishu',
 
@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS memories (
   -- 压缩管线（Myco-inspired）
   compressed_from TEXT DEFAULT '[]', -- JSON 数组：被压缩合并的源 memory rowid 列表
   is_compressed INTEGER NOT NULL DEFAULT 0, -- 1 = 此条是压缩产物，不可再被压缩（防级联）
+
+  -- 抽象层级（Memory Transfer Learning 启发，arxiv 2604.14004）
+  -- concrete_trace: 具体操作记录（低权重，易负迁移）
+  -- semi_abstract:  半抽象描述（默认，中权重）
+  -- meta_knowledge: 模式/方法/启发式（高权重，跨域最有效）
+  memory_level TEXT NOT NULL DEFAULT 'semi_abstract'
+    CHECK (memory_level IN ('concrete_trace', 'semi_abstract', 'meta_knowledge')),
 
   -- 扩展元数据
   metadata TEXT DEFAULT '{}',
@@ -58,10 +65,16 @@ CREATE TABLE IF NOT EXISTS memories (
   expires_at INTEGER,
 
   -- 软删除
-  deleted_at INTEGER
+  deleted_at INTEGER,
+
+  -- 结构化 supersede（Mnemonic Sovereignty / harness-evolve #001）
+  -- 软关联到另一条 memories.id（hex），expireMemories() 会把 superseded_by 非空的标 deleted_at
+  -- 不加 FOREIGN KEY：SQLite 软关联即可，避免删除级联
+  superseded_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_mem_type ON memories(memory_type) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_mem_superseded_by ON memories(superseded_by) WHERE superseded_by IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_mem_category ON memories(category) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_mem_importance ON memories(importance DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_mem_created ON memories(created_at DESC) WHERE deleted_at IS NULL;
@@ -197,3 +210,58 @@ CREATE TABLE IF NOT EXISTS episodes (
 
 CREATE INDEX IF NOT EXISTS idx_ep_type ON episodes(event_type) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_ep_memory ON episodes(memory_id);
+
+-- ── 6. Session 摘要表（migration 002） ─────────────────────────
+-- 把 CC session 当成可结构化追溯对象——降低 user 对 session 的 attachment
+-- Phase A：零 LLM 抽取（files / meta_rowids / related / topic_tags）
+-- Phase B（后续）：narrative（Haiku）
+-- Phase C（后续）：decisions / blockers（深度抽取）
+CREATE TABLE IF NOT EXISTS session_summaries (
+  session_id TEXT PRIMARY KEY,
+  started_at INTEGER,
+  ended_at INTEGER,
+  duration_min INTEGER,
+  workspace_root TEXT,
+  message_count INTEGER DEFAULT 0,
+  tool_call_count INTEGER DEFAULT 0,
+  files_modified TEXT NOT NULL DEFAULT '[]',
+  meta_knowledge_rowids TEXT NOT NULL DEFAULT '[]',
+  topic_tags TEXT NOT NULL DEFAULT '[]',
+  related_session_ids TEXT NOT NULL DEFAULT '[]',
+  narrative TEXT,
+  decisions TEXT NOT NULL DEFAULT '[]',
+  blockers TEXT NOT NULL DEFAULT '[]',
+  extracted_phase TEXT NOT NULL DEFAULT 'A',
+  extracted_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ss_started ON session_summaries(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ss_extracted ON session_summaries(extracted_at);
+CREATE INDEX IF NOT EXISTS idx_ss_phase ON session_summaries(extracted_phase);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_summaries_fts USING fts5(
+  narrative,
+  topic_tags,
+  content='session_summaries',
+  content_rowid='rowid',
+  tokenize='simple 0'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_ss_fts_insert AFTER INSERT ON session_summaries BEGIN
+  INSERT INTO session_summaries_fts(rowid, narrative, topic_tags)
+  VALUES (new.rowid, new.narrative, new.topic_tags);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ss_fts_delete AFTER DELETE ON session_summaries BEGIN
+  INSERT INTO session_summaries_fts(session_summaries_fts, rowid, narrative, topic_tags)
+  VALUES ('delete', old.rowid, old.narrative, old.topic_tags);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ss_fts_update AFTER UPDATE OF narrative, topic_tags ON session_summaries BEGIN
+  INSERT INTO session_summaries_fts(session_summaries_fts, rowid, narrative, topic_tags)
+  VALUES ('delete', old.rowid, old.narrative, old.topic_tags);
+  INSERT INTO session_summaries_fts(rowid, narrative, topic_tags)
+  VALUES (new.rowid, new.narrative, new.topic_tags);
+END;
